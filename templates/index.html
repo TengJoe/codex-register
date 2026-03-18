@@ -224,15 +224,35 @@
 
                                 <div class="form-group" id="auto-upload-group">
                                     <label style="font-weight: 500; margin-bottom: var(--spacing-xs); display: block;">注册后自动操作</label>
+
+                                    <!-- CPA -->
                                     <label style="display: flex; align-items: center; gap: var(--spacing-sm); cursor: pointer;">
                                         <input type="checkbox" id="auto-upload-cpa">
                                         <span>上传到 CPA</span>
                                     </label>
-                                    <div id="cpa-service-select-group" style="display:none; margin-top: 8px; padding-left: 4px;">
-                                        <label style="font-size:0.85rem; color:var(--text-muted); margin-bottom:4px; display:block;">选择 CPA 服务</label>
-                                        <select id="cpa-service-select" style="width:100%; padding:6px 10px; border:1px solid var(--border); border-radius:6px; background:var(--surface); color:var(--text-primary); font-size:0.9rem;">
-                                            <option value="">使用全局配置</option>
-                                        </select>
+                                    <div id="cpa-service-select-group" style="display:none; margin-top: 6px; margin-bottom: 8px; padding-left: 4px;">
+                                        <label style="font-size:0.85rem; color:var(--text-muted); margin-bottom:4px; display:block;">选择 CPA 服务（可多选）</label>
+                                        <div id="cpa-service-checkboxes" style="display:flex; flex-direction:column; gap:4px; max-height:120px; overflow-y:auto; border:1px solid var(--border); border-radius:6px; padding:6px;"></div>
+                                    </div>
+
+                                    <!-- Sub2API -->
+                                    <label style="display: flex; align-items: center; gap: var(--spacing-sm); cursor: pointer; margin-top: 6px;">
+                                        <input type="checkbox" id="auto-upload-sub2api">
+                                        <span>上传到 Sub2API</span>
+                                    </label>
+                                    <div id="sub2api-service-select-group" style="display:none; margin-top: 6px; margin-bottom: 8px; padding-left: 4px;">
+                                        <label style="font-size:0.85rem; color:var(--text-muted); margin-bottom:4px; display:block;">选择 Sub2API 服务（可多选）</label>
+                                        <div id="sub2api-service-checkboxes" style="display:flex; flex-direction:column; gap:4px; max-height:120px; overflow-y:auto; border:1px solid var(--border); border-radius:6px; padding:6px;"></div>
+                                    </div>
+
+                                    <!-- Team Manager -->
+                                    <label style="display: flex; align-items: center; gap: var(--spacing-sm); cursor: pointer; margin-top: 6px;">
+                                        <input type="checkbox" id="auto-upload-tm">
+                                        <span>上传到 Team Manager</span>
+                                    </label>
+                                    <div id="tm-service-select-group" style="display:none; margin-top: 6px; padding-left: 4px;">
+                                        <label style="font-size:0.85rem; color:var(--text-muted); margin-bottom:4px; display:block;">选择 TM 服务（可多选）</label>
+                                        <div id="tm-service-checkboxes" style="display:flex; flex-direction:column; gap:4px; max-height:120px; overflow-y:auto; border:1px solid var(--border); border-radius:6px; padding:6px;"></div>
                                     </div>
                                 </div>
 

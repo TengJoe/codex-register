@@ -70,24 +70,32 @@ class RegistrationTaskCreate(BaseModel):
     email_service_type: str = "tempmail"
     proxy: Optional[str] = None
     email_service_config: Optional[dict] = None
-    email_service_id: Optional[int] = None  # 使用数据库中已配置的邮箱服务 ID
-    auto_upload_cpa: bool = False  # 注册成功后自动上传到 CPA
-    cpa_service_id: Optional[int] = None  # 指定 CPA 服务 ID，不传则使用全局配置
+    email_service_id: Optional[int] = None
+    auto_upload_cpa: bool = False
+    cpa_service_ids: List[int] = []  # 指定 CPA 服务 ID 列表，空则取第一个启用的
+    auto_upload_sub2api: bool = False
+    sub2api_service_ids: List[int] = []  # 指定 Sub2API 服务 ID 列表
+    auto_upload_tm: bool = False
+    tm_service_ids: List[int] = []  # 指定 TM 服务 ID 列表
 
 
 class BatchRegistrationRequest(BaseModel):
     """批量注册请求"""
-    count: int = 1  # 注册数量
+    count: int = 1
     email_service_type: str = "tempmail"
     proxy: Optional[str] = None
     email_service_config: Optional[dict] = None
-    email_service_id: Optional[int] = None  # 使用数据库中已配置的邮箱服务 ID
-    interval_min: int = 5  # 最小间隔秒数
-    interval_max: int = 30  # 最大间隔秒数
-    concurrency: int = 1   # 并发线程数 (1-50)
-    mode: str = "pipeline"  # 执行模式: "parallel" 或 "pipeline"
-    auto_upload_cpa: bool = False  # 注册成功后自动上传到 CPA
-    cpa_service_id: Optional[int] = None  # 指定 CPA 服务 ID，不传则使用全局配置
+    email_service_id: Optional[int] = None
+    interval_min: int = 5
+    interval_max: int = 30
+    concurrency: int = 1
+    mode: str = "pipeline"
+    auto_upload_cpa: bool = False
+    cpa_service_ids: List[int] = []
+    auto_upload_sub2api: bool = False
+    sub2api_service_ids: List[int] = []
+    auto_upload_tm: bool = False
+    tm_service_ids: List[int] = []
 
 
 class RegistrationTaskResponse(BaseModel):
@@ -143,15 +151,19 @@ class OutlookAccountsListResponse(BaseModel):
 
 class OutlookBatchRegistrationRequest(BaseModel):
     """Outlook 批量注册请求"""
-    service_ids: List[int]       # 选中的 EmailService ID
-    skip_registered: bool = True  # 自动跳过已注册邮箱
+    service_ids: List[int]
+    skip_registered: bool = True
     proxy: Optional[str] = None
     interval_min: int = 5
     interval_max: int = 30
-    concurrency: int = 1   # 并发线程数 (1-50)
-    mode: str = "pipeline"  # 执行模式: "parallel" 或 "pipeline"
-    auto_upload_cpa: bool = False  # 注册成功后自动上传到 CPA
-    cpa_service_id: Optional[int] = None  # 指定 CPA 服务 ID，不传则使用全局配置
+    concurrency: int = 1
+    mode: str = "pipeline"
+    auto_upload_cpa: bool = False
+    cpa_service_ids: List[int] = []
+    auto_upload_sub2api: bool = False
+    sub2api_service_ids: List[int] = []
+    auto_upload_tm: bool = False
+    tm_service_ids: List[int] = []
 
 
 class OutlookBatchRegistrationResponse(BaseModel):
@@ -182,7 +194,7 @@ def task_to_response(task: RegistrationTask) -> RegistrationTaskResponse:
     )
 
 
-def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_upload_cpa: bool = False, cpa_service_id: Optional[int] = None):
+def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None):
     """
     在线程池中执行的同步注册任务
 
@@ -339,7 +351,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 # 保存到数据库
                 engine.save_to_database(result)
 
-                # 自动上传到 CPA
+                # 自动上传到 CPA（可多服务）
                 if auto_upload_cpa:
                     try:
                         from ...core.cpa_upload import upload_to_cpa, generate_token_json
@@ -347,32 +359,80 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                         saved_account = db.query(AccountModel).filter_by(email=result.email).first()
                         if saved_account and saved_account.access_token:
                             token_data = generate_token_json(saved_account)
-                            # 解析指定 CPA 服务，未指定则取第一个启用的服务
-                            _cpa_api_url = None
-                            _cpa_api_token = None
-                            _svc = None
-                            if cpa_service_id:
+                            _cpa_ids = cpa_service_ids or []
+                            if not _cpa_ids:
+                                # 未指定则取所有启用的服务
+                                _cpa_ids = [s.id for s in crud.get_cpa_services(db, enabled=True)]
+                            if not _cpa_ids:
+                                log_callback("[CPA] 无可用 CPA 服务，跳过上传")
+                            for _sid in _cpa_ids:
                                 try:
-                                    _svc = crud.get_cpa_service_by_id(db, cpa_service_id)
-                                except Exception:
-                                    pass
-                            if _svc is None:
-                                svcs = crud.get_cpa_services(db, enabled=True)
-                                _svc = svcs[0] if svcs else None
-                            if _svc:
-                                _cpa_api_url = _svc.api_url
-                                _cpa_api_token = _svc.api_token
-                                log_callback(f"[CPA] 使用服务: {_svc.name}")
-                            cpa_success, cpa_msg = upload_to_cpa(token_data, api_url=_cpa_api_url, api_token=_cpa_api_token)
-                            if cpa_success:
-                                saved_account.cpa_uploaded = True
-                                saved_account.cpa_uploaded_at = datetime.utcnow()
-                                db.commit()
-                                log_callback(f"[CPA] 已自动上传到 CPA: {result.email}")
-                            else:
-                                log_callback(f"[CPA] 上传失败: {cpa_msg}")
+                                    _svc = crud.get_cpa_service_by_id(db, _sid)
+                                    if not _svc:
+                                        continue
+                                    log_callback(f"[CPA] 上传到服务: {_svc.name}")
+                                    _ok, _msg = upload_to_cpa(token_data, api_url=_svc.api_url, api_token=_svc.api_token)
+                                    if _ok:
+                                        saved_account.cpa_uploaded = True
+                                        saved_account.cpa_uploaded_at = datetime.utcnow()
+                                        db.commit()
+                                        log_callback(f"[CPA] 上传成功: {_svc.name}")
+                                    else:
+                                        log_callback(f"[CPA] 上传失败({_svc.name}): {_msg}")
+                                except Exception as _e:
+                                    log_callback(f"[CPA] 异常({_sid}): {_e}")
                     except Exception as cpa_err:
                         log_callback(f"[CPA] 上传异常: {cpa_err}")
+
+                # 自动上传到 Sub2API（可多服务）
+                if auto_upload_sub2api:
+                    try:
+                        from ...core.sub2api_upload import upload_to_sub2api
+                        from ...database.models import Account as AccountModel
+                        saved_account = db.query(AccountModel).filter_by(email=result.email).first()
+                        if saved_account and saved_account.access_token:
+                            _s2a_ids = sub2api_service_ids or []
+                            if not _s2a_ids:
+                                _s2a_ids = [s.id for s in crud.get_sub2api_services(db, enabled=True)]
+                            if not _s2a_ids:
+                                log_callback("[Sub2API] 无可用 Sub2API 服务，跳过上传")
+                            for _sid in _s2a_ids:
+                                try:
+                                    _svc = crud.get_sub2api_service_by_id(db, _sid)
+                                    if not _svc:
+                                        continue
+                                    log_callback(f"[Sub2API] 上传到服务: {_svc.name}")
+                                    _ok, _msg = upload_to_sub2api([saved_account], _svc.api_url, _svc.api_key)
+                                    log_callback(f"[Sub2API] {'成功' if _ok else '失败'}({_svc.name}): {_msg}")
+                                except Exception as _e:
+                                    log_callback(f"[Sub2API] 异常({_sid}): {_e}")
+                    except Exception as s2a_err:
+                        log_callback(f"[Sub2API] 上传异常: {s2a_err}")
+
+                # 自动上传到 Team Manager（可多服务）
+                if auto_upload_tm:
+                    try:
+                        from ...core.team_manager import upload_account_to_tm
+                        from ...database.models import Account as AccountModel
+                        saved_account = db.query(AccountModel).filter_by(email=result.email).first()
+                        if saved_account and saved_account.access_token:
+                            _tm_ids = tm_service_ids or []
+                            if not _tm_ids:
+                                _tm_ids = [s.id for s in crud.get_tm_services(db, enabled=True)]
+                            if not _tm_ids:
+                                log_callback("[TM] 无可用 Team Manager 服务，跳过上传")
+                            for _sid in _tm_ids:
+                                try:
+                                    _svc = crud.get_tm_service_by_id(db, _sid)
+                                    if not _svc:
+                                        continue
+                                    log_callback(f"[TM] 上传到服务: {_svc.name}")
+                                    _ok, _msg = upload_account_to_tm(saved_account, _svc.api_url, _svc.api_key)
+                                    log_callback(f"[TM] {'成功' if _ok else '失败'}({_svc.name}): {_msg}")
+                                except Exception as _e:
+                                    log_callback(f"[TM] 异常({_sid}): {_e}")
+                    except Exception as tm_err:
+                        log_callback(f"[TM] 上传异常: {tm_err}")
 
                 # 更新任务状态
                 crud.update_registration_task(
@@ -418,7 +478,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 pass
 
 
-async def run_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_upload_cpa: bool = False, cpa_service_id: Optional[int] = None):
+async def run_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None):
     """
     异步执行注册任务
 
@@ -446,7 +506,11 @@ async def run_registration_task(task_uuid: str, email_service_type: str, proxy: 
             log_prefix,
             batch_id,
             auto_upload_cpa,
-            cpa_service_id
+            cpa_service_ids or [],
+            auto_upload_sub2api,
+            sub2api_service_ids or [],
+            auto_upload_tm,
+            tm_service_ids or [],
         )
     except Exception as e:
         logger.error(f"线程池执行异常: {task_uuid}, 错误: {e}")
@@ -494,7 +558,11 @@ async def run_batch_parallel(
     email_service_id: Optional[int],
     concurrency: int,
     auto_upload_cpa: bool = False,
-    cpa_service_id: Optional[int] = None
+    cpa_service_ids: List[int] = None,
+    auto_upload_sub2api: bool = False,
+    sub2api_service_ids: List[int] = None,
+    auto_upload_tm: bool = False,
+    tm_service_ids: List[int] = None,
 ):
     """
     并行模式：所有任务同时提交，Semaphore 控制最大并发数
@@ -510,8 +578,10 @@ async def run_batch_parallel(
         async with semaphore:
             await run_registration_task(
                 uuid, email_service_type, proxy, email_service_config, email_service_id,
-                log_prefix=prefix, batch_id=batch_id, auto_upload_cpa=auto_upload_cpa,
-                cpa_service_id=cpa_service_id
+                log_prefix=prefix, batch_id=batch_id,
+                auto_upload_cpa=auto_upload_cpa, cpa_service_ids=cpa_service_ids or [],
+                auto_upload_sub2api=auto_upload_sub2api, sub2api_service_ids=sub2api_service_ids or [],
+                auto_upload_tm=auto_upload_tm, tm_service_ids=tm_service_ids or [],
             )
         with get_db() as db:
             t = crud.get_registration_task(db, uuid)
@@ -554,7 +624,11 @@ async def run_batch_pipeline(
     interval_max: int,
     concurrency: int,
     auto_upload_cpa: bool = False,
-    cpa_service_id: Optional[int] = None
+    cpa_service_ids: List[int] = None,
+    auto_upload_sub2api: bool = False,
+    sub2api_service_ids: List[int] = None,
+    auto_upload_tm: bool = False,
+    tm_service_ids: List[int] = None,
 ):
     """
     流水线模式：每隔 interval 秒启动一个新任务，Semaphore 限制最大并发数
@@ -570,8 +644,10 @@ async def run_batch_pipeline(
         try:
             await run_registration_task(
                 uuid, email_service_type, proxy, email_service_config, email_service_id,
-                log_prefix=pfx, batch_id=batch_id, auto_upload_cpa=auto_upload_cpa,
-                cpa_service_id=cpa_service_id
+                log_prefix=pfx, batch_id=batch_id,
+                auto_upload_cpa=auto_upload_cpa, cpa_service_ids=cpa_service_ids or [],
+                auto_upload_sub2api=auto_upload_sub2api, sub2api_service_ids=sub2api_service_ids or [],
+                auto_upload_tm=auto_upload_tm, tm_service_ids=tm_service_ids or [],
             )
             with get_db() as db:
                 t = crud.get_registration_task(db, uuid)
@@ -638,21 +714,29 @@ async def run_batch_registration(
     concurrency: int = 1,
     mode: str = "pipeline",
     auto_upload_cpa: bool = False,
-    cpa_service_id: Optional[int] = None
+    cpa_service_ids: List[int] = None,
+    auto_upload_sub2api: bool = False,
+    sub2api_service_ids: List[int] = None,
+    auto_upload_tm: bool = False,
+    tm_service_ids: List[int] = None,
 ):
     """根据 mode 分发到并行或流水线执行"""
     if mode == "parallel":
         await run_batch_parallel(
             batch_id, task_uuids, email_service_type, proxy,
             email_service_config, email_service_id, concurrency,
-            auto_upload_cpa=auto_upload_cpa, cpa_service_id=cpa_service_id
+            auto_upload_cpa=auto_upload_cpa, cpa_service_ids=cpa_service_ids,
+            auto_upload_sub2api=auto_upload_sub2api, sub2api_service_ids=sub2api_service_ids,
+            auto_upload_tm=auto_upload_tm, tm_service_ids=tm_service_ids,
         )
     else:
         await run_batch_pipeline(
             batch_id, task_uuids, email_service_type, proxy,
             email_service_config, email_service_id,
             interval_min, interval_max, concurrency,
-            auto_upload_cpa=auto_upload_cpa, cpa_service_id=cpa_service_id
+            auto_upload_cpa=auto_upload_cpa, cpa_service_ids=cpa_service_ids,
+            auto_upload_sub2api=auto_upload_sub2api, sub2api_service_ids=sub2api_service_ids,
+            auto_upload_tm=auto_upload_tm, tm_service_ids=tm_service_ids,
         )
 
 
@@ -700,7 +784,11 @@ async def start_registration(
         "",
         "",
         request.auto_upload_cpa,
-        request.cpa_service_id
+        request.cpa_service_ids,
+        request.auto_upload_sub2api,
+        request.sub2api_service_ids,
+        request.auto_upload_tm,
+        request.tm_service_ids,
     )
 
     return task_to_response(task)
@@ -773,7 +861,11 @@ async def start_batch_registration(
         request.concurrency,
         request.mode,
         request.auto_upload_cpa,
-        request.cpa_service_id
+        request.cpa_service_ids,
+        request.auto_upload_sub2api,
+        request.sub2api_service_ids,
+        request.auto_upload_tm,
+        request.tm_service_ids,
     )
 
     return BatchRegistrationResponse(
@@ -1103,7 +1195,11 @@ async def run_outlook_batch_registration(
     concurrency: int = 1,
     mode: str = "pipeline",
     auto_upload_cpa: bool = False,
-    cpa_service_id: Optional[int] = None
+    cpa_service_ids: List[int] = None,
+    auto_upload_sub2api: bool = False,
+    sub2api_service_ids: List[int] = None,
+    auto_upload_tm: bool = False,
+    tm_service_ids: List[int] = None,
 ):
     """
     异步执行 Outlook 批量注册任务，复用通用并发逻辑
@@ -1142,7 +1238,11 @@ async def run_outlook_batch_registration(
         concurrency=concurrency,
         mode=mode,
         auto_upload_cpa=auto_upload_cpa,
-        cpa_service_id=cpa_service_id
+        cpa_service_ids=cpa_service_ids,
+        auto_upload_sub2api=auto_upload_sub2api,
+        sub2api_service_ids=sub2api_service_ids,
+        auto_upload_tm=auto_upload_tm,
+        tm_service_ids=tm_service_ids,
     )
 
 
@@ -1242,7 +1342,11 @@ async def start_outlook_batch_registration(
         request.concurrency,
         request.mode,
         request.auto_upload_cpa,
-        request.cpa_service_id
+        request.cpa_service_ids,
+        request.auto_upload_sub2api,
+        request.sub2api_service_ids,
+        request.auto_upload_tm,
+        request.tm_service_ids,
     )
 
     return OutlookBatchRegistrationResponse(

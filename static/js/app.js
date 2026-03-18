@@ -85,7 +85,13 @@ const elements = {
     // 注册后自动操作
     autoUploadCpa: document.getElementById('auto-upload-cpa'),
     cpaServiceSelectGroup: document.getElementById('cpa-service-select-group'),
-    cpaServiceSelect: document.getElementById('cpa-service-select')
+    cpaServiceCheckboxes: document.getElementById('cpa-service-checkboxes'),
+    autoUploadSub2api: document.getElementById('auto-upload-sub2api'),
+    sub2apiServiceSelectGroup: document.getElementById('sub2api-service-select-group'),
+    sub2apiServiceCheckboxes: document.getElementById('sub2api-service-checkboxes'),
+    autoUploadTm: document.getElementById('auto-upload-tm'),
+    tmServiceSelectGroup: document.getElementById('tm-service-select-group'),
+    tmServiceCheckboxes: document.getElementById('tm-service-checkboxes'),
 };
 
 // 初始化
@@ -96,48 +102,54 @@ document.addEventListener('DOMContentLoaded', () => {
     startAccountsPolling();
     initVisibilityReconnect();
     restoreActiveTask();
-    checkCpaEnabled();
+    initAutoUploadOptions();
 });
 
-// 检查 CPA 是否启用，未启用则禁用复选框；同时加载 CPA 服务列表
-async function checkCpaEnabled() {
-    if (!elements.autoUploadCpa) return;
-    // 加载 CPA 服务列表，列表为空则禁用复选框
-    await loadCpaServiceOptions();
-    try {
-        const services = await api.get('/cpa-services?enabled=true');
-        if (!services || services.length === 0) {
-            elements.autoUploadCpa.disabled = true;
-            elements.autoUploadCpa.title = '请先在设置中添加 CPA 服务';
-            const label = elements.autoUploadCpa.closest('label');
-            if (label) label.style.opacity = '0.5';
-        }
-    } catch (e) {
-        elements.autoUploadCpa.disabled = true;
-    }
-    // 复选框联动显示/隐藏服务选择器
-    if (elements.autoUploadCpa) {
-        elements.autoUploadCpa.addEventListener('change', () => {
-            if (elements.cpaServiceSelectGroup) {
-                elements.cpaServiceSelectGroup.style.display =
-                    elements.autoUploadCpa.checked ? 'block' : 'none';
-            }
-        });
-    }
+// 初始化注册后自动操作选项（CPA / Sub2API / TM）
+async function initAutoUploadOptions() {
+    await Promise.all([
+        loadServiceCheckboxes('cpa', '/cpa-services?enabled=true', elements.cpaServiceCheckboxes, elements.autoUploadCpa, elements.cpaServiceSelectGroup),
+        loadServiceCheckboxes('sub2api', '/sub2api-services?enabled=true', elements.sub2apiServiceCheckboxes, elements.autoUploadSub2api, elements.sub2apiServiceSelectGroup),
+        loadServiceCheckboxes('tm', '/tm-services?enabled=true', elements.tmServiceCheckboxes, elements.autoUploadTm, elements.tmServiceSelectGroup),
+    ]);
 }
 
-async function loadCpaServiceOptions() {
-    if (!elements.cpaServiceSelect) return;
+// 通用：加载服务 checkbox 列表，并处理联动
+async function loadServiceCheckboxes(type, apiPath, container, checkbox, selectGroup) {
+    if (!checkbox || !container) return;
+    let services = [];
     try {
-        const services = await api.get('/cpa-services?enabled=true');
-        const defaultOpt = '<option value="">自动选择（第一个启用的服务）</option>';
-        const opts = services.map(s =>
-            `<option value="${s.id}">${s.name.replace(/</g,'&lt;')}</option>`
-        ).join('');
-        elements.cpaServiceSelect.innerHTML = defaultOpt + opts;
-    } catch (e) {
-        // 加载失败静默处理，保持默认选项
+        services = await api.get(apiPath);
+    } catch (e) {}
+
+    if (!services || services.length === 0) {
+        checkbox.disabled = true;
+        checkbox.title = '请先在设置中添加对应服务';
+        const label = checkbox.closest('label');
+        if (label) label.style.opacity = '0.5';
+        if (container) container.innerHTML = '<div style="color:var(--text-muted);font-size:0.8rem;">暂无可用服务</div>';
+    } else {
+        container.innerHTML = services.map(s => `
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                <input type="checkbox" class="upload-svc-cb upload-svc-${type}" value="${s.id}" checked>
+                <span style="font-size:0.85rem;">${escapeHtml(s.name)}</span>
+            </label>
+        `).join('');
     }
+
+    // 联动显示/隐藏服务选择区
+    checkbox.addEventListener('change', () => {
+        if (selectGroup) selectGroup.style.display = checkbox.checked ? 'block' : 'none';
+    });
+}
+
+// 获取选中的服务 ID 列表
+function getCheckedServiceIds(type) {
+    const ids = [];
+    document.querySelectorAll(`.upload-svc-${type}:checked`).forEach(cb => {
+        ids.push(parseInt(cb.value));
+    });
+    return ids;
 }
 
 // 事件监听
@@ -382,12 +394,13 @@ async function handleStartRegistration(e) {
     // 构建请求数据（代理从设置中自动获取）
     const requestData = {
         email_service_type: emailServiceType,
-        auto_upload_cpa: elements.autoUploadCpa ? elements.autoUploadCpa.checked : false
+        auto_upload_cpa: elements.autoUploadCpa ? elements.autoUploadCpa.checked : false,
+        cpa_service_ids: elements.autoUploadCpa && elements.autoUploadCpa.checked ? getCheckedServiceIds('cpa') : [],
+        auto_upload_sub2api: elements.autoUploadSub2api ? elements.autoUploadSub2api.checked : false,
+        sub2api_service_ids: elements.autoUploadSub2api && elements.autoUploadSub2api.checked ? getCheckedServiceIds('sub2api') : [],
+        auto_upload_tm: elements.autoUploadTm ? elements.autoUploadTm.checked : false,
+        tm_service_ids: elements.autoUploadTm && elements.autoUploadTm.checked ? getCheckedServiceIds('tm') : [],
     };
-    // 带上指定 CPA 服务
-    if (requestData.auto_upload_cpa && elements.cpaServiceSelect && elements.cpaServiceSelect.value) {
-        requestData.cpa_service_id = parseInt(elements.cpaServiceSelect.value);
-    }
 
     // 如果选择了数据库中的服务，传递 service_id
     if (serviceId && serviceId !== 'default') {
@@ -1085,7 +1098,12 @@ async function handleOutlookBatchRegistration() {
         interval_max: intervalMax,
         concurrency: Math.min(50, Math.max(1, concurrency)),
         mode: mode,
-        auto_upload_cpa: elements.autoUploadCpa ? elements.autoUploadCpa.checked : false
+        auto_upload_cpa: elements.autoUploadCpa ? elements.autoUploadCpa.checked : false,
+        cpa_service_ids: elements.autoUploadCpa && elements.autoUploadCpa.checked ? getCheckedServiceIds('cpa') : [],
+        auto_upload_sub2api: elements.autoUploadSub2api ? elements.autoUploadSub2api.checked : false,
+        sub2api_service_ids: elements.autoUploadSub2api && elements.autoUploadSub2api.checked ? getCheckedServiceIds('sub2api') : [],
+        auto_upload_tm: elements.autoUploadTm ? elements.autoUploadTm.checked : false,
+        tm_service_ids: elements.autoUploadTm && elements.autoUploadTm.checked ? getCheckedServiceIds('tm') : [],
     };
 
     addLog('info', `[系统] 正在启动 Outlook 批量注册 (${selectedIds.length} 个账户)...`);
