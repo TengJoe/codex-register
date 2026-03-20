@@ -34,13 +34,13 @@ class GenerateLinkRequest(BaseModel):
     price_interval: str = "month"
     seat_quantity: int = 5
     proxy: Optional[str] = None
-    auto_open: bool = False  # 生成后是否自动无痕打开
-    country: str = "SG"  # 计费国家，决定货币  # 生成后是否自动无痕打开
+    auto_open: bool = False
+    country: str = "SG"
 
 
 class OpenIncognitoRequest(BaseModel):
     url: str
-    account_id: Optional[int] = None  # 可选，用于注入账号 cookie
+    account_id: Optional[int] = None
 
 
 class MarkSubscriptionRequest(BaseModel):
@@ -124,7 +124,12 @@ def open_browser_incognito(request: OpenIncognitoRequest):
 
 @router.post("/accounts/batch-check-subscription")
 def batch_check_subscription(request: BatchCheckSubscriptionRequest):
-    """批量检测账号订阅状态"""
+    """
+    批量检测账号订阅状态。
+
+    检测成功：更新 subscription_type，并将 status 确认为 active（token 有效）
+    检测失败：说明 access_token 无效，将 status 标记为 expired
+    """
     proxy = request.proxy or get_settings().proxy_url
 
     results = {"success_count": 0, "failed_count": 0, "details": []}
@@ -145,17 +150,34 @@ def batch_check_subscription(request: BatchCheckSubscriptionRequest):
 
             try:
                 status = check_subscription_status(account, proxy)
+                # 检测成功：token 有效，更新订阅类型，确保账号状态为 active
                 account.subscription_type = None if status == "free" else status
-                account.subscription_at = datetime.utcnow() if status != "free" else account.subscription_at
+                account.subscription_at = (
+                    datetime.utcnow() if status != "free" else account.subscription_at
+                )
+                # ★ 能成功调用接口说明 token 有效，确保状态是 active
+                account.status = "active"
                 db.commit()
+
                 results["success_count"] += 1
                 results["details"].append(
                     {"id": account_id, "email": account.email, "success": True, "subscription_type": status}
                 )
+                logger.debug(f"账号 {account_id} 订阅检测成功: {status}")
+
             except Exception as e:
+                error_msg = str(e)
+                # ★ 检测失败（通常是 401/403，说明 token 已失效）→ 标记为 expired
+                try:
+                    account.status = "expired"
+                    db.commit()
+                    logger.info(f"账号 {account_id} 订阅检测失败，已标记为 expired: {error_msg}")
+                except Exception as db_err:
+                    logger.warning(f"账号 {account_id} 状态更新失败: {db_err}")
+
                 results["failed_count"] += 1
                 results["details"].append(
-                    {"id": account_id, "email": account.email, "success": False, "error": str(e)}
+                    {"id": account_id, "email": account.email, "success": False, "error": error_msg}
                 )
 
     return results
@@ -178,5 +200,3 @@ def mark_subscription(account_id: int, request: MarkSubscriptionRequest):
         db.commit()
 
     return {"success": True, "subscription_type": request.subscription_type}
-
-

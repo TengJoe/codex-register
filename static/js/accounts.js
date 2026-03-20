@@ -516,6 +516,7 @@ async function handleBatchRefresh() {
     try {
         const result = await api.post('/accounts/batch-refresh', buildBatchPayload());
         toast.success(`成功刷新 ${result.success_count} 个，失败 ${result.failed_count} 个`);
+        loadStats();
         loadAccounts();
     } catch (error) {
         toast.error('批量刷新失败: ' + error.message);
@@ -534,6 +535,7 @@ async function handleBatchValidate() {
     try {
         const result = await api.post('/accounts/batch-validate', buildBatchPayload());
         toast.info(`有效: ${result.valid_count}，无效: ${result.invalid_count}`);
+        loadStats();
         loadAccounts();
     } catch (error) {
         toast.error('批量验证失败: ' + error.message);
@@ -749,8 +751,6 @@ function escapeHtml(text) {
 
 // ============== CPA 服务选择 ==============
 
-// 弹出 CPA 服务选择框，返回 Promise<{cpa_service_id: number|null}|null>
-// null 表示用户取消，{cpa_service_id: null} 表示使用全局配置
 function selectCpaService() {
     return new Promise(async (resolve) => {
         const modal = document.getElementById('cpa-service-modal');
@@ -759,7 +759,6 @@ function selectCpaService() {
         const cancelBtn = document.getElementById('cancel-cpa-modal-btn');
         const globalBtn = document.getElementById('cpa-use-global-btn');
 
-        // 加载服务列表
         listEl.innerHTML = '<div style="text-align:center;color:var(--text-muted)">加载中...</div>';
         modal.classList.add('active');
 
@@ -857,7 +856,7 @@ async function uploadAccount(id) {
 // 上传单个账号到CPA
 async function uploadToCpa(id) {
     const choice = await selectCpaService();
-    if (choice === null) return;  // 用户取消
+    if (choice === null) return;
 
     try {
         toast.info('正在上传到CPA...');
@@ -882,7 +881,7 @@ async function handleBatchUploadCpa() {
     if (count === 0) return;
 
     const choice = await selectCpaService();
-    if (choice === null) return;  // 用户取消
+    if (choice === null) return;
 
     const confirmed = await confirm(`确定要将选中的 ${count} 个账号上传到CPA吗？`);
     if (!confirmed) return;
@@ -944,6 +943,7 @@ async function handleBatchCheckSubscription() {
         let message = `成功: ${result.success_count}`;
         if (result.failed_count > 0) message += `, 失败: ${result.failed_count}`;
         toast.success(message);
+        loadStats();      // ★ 刷新顶部统计卡（活跃/过期数字）
         loadAccounts();
     } catch (e) {
         toast.error('批量检测失败: ' + e.message);
@@ -954,8 +954,6 @@ async function handleBatchCheckSubscription() {
 
 // ============== Sub2API 上传 ==============
 
-// 弹出 Sub2API 服务选择框，返回 Promise<{service_id: number|null}|null>
-// null 表示用户取消，{service_id: null} 表示自动选择
 function selectSub2ApiService() {
     return new Promise(async (resolve) => {
         const modal = document.getElementById('sub2api-service-modal');
@@ -1027,7 +1025,7 @@ async function handleBatchUploadSub2Api() {
     if (count === 0) return;
 
     const choice = await selectSub2ApiService();
-    if (choice === null) return;  // 用户取消
+    if (choice === null) return;
 
     const confirmed = await confirm(`确定要将选中的 ${count} 个账号上传到 Sub2API 吗？`);
     if (!confirmed) return;
@@ -1075,8 +1073,6 @@ async function uploadToSub2Api(id) {
     }
 }
 
-// 弹出 Team Manager 服务选择框，返回 Promise<{service_id: number|null}|null>
-// null 表示用户取消，{service_id: null} 表示自动选择
 function selectTmService() {
     return new Promise(async (resolve) => {
         const modal = document.getElementById('tm-service-modal');
@@ -1167,7 +1163,7 @@ async function handleBatchUploadTm() {
     if (count === 0) return;
 
     const choice = await selectTmService();
-    if (choice === null) return;  // 用户取消
+    if (choice === null) return;
 
     const confirmed = await confirm(`确定要将选中的 ${count} 个账号上传到 Team Manager 吗？`);
     if (!confirmed) return;
@@ -1195,7 +1191,6 @@ async function handleBatchUploadTm() {
 function toggleMoreMenu(btn) {
     const menu = btn.nextElementSibling;
     const isActive = menu.classList.contains('active');
-    // 关闭所有其他更多菜单
     document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
     if (!isActive) menu.classList.add('active');
 }
